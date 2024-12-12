@@ -32,10 +32,6 @@ def controller(shared):
     dt = 0.01                       # HEBI feedback comes in at 100Hz!
 
     # Also read the initial position.
-    feedback = group.get_next_feedback(reuse_fbk=feedback)
-    pinit = feedback.position[0]
-
-
     #
     #  Define the parameters
     #
@@ -82,7 +78,7 @@ def controller(shared):
         return (pcmd, vcmd)
         
     def scancmds(t, t_0, Apan, Atilt, Tscan):
-        pcmd = np.array([Apan*sin((2*pi)*(t - t_0)/Tscan), Atilt*sin((8*pi)*(t - t_0)/Tscan)]) + offset
+        pcmd = np.array([Apan*sin((2*pi)*(t - t_0)/Tscan), Atilt*sin((8*pi)*(t - t_0)/Tscan)])
         vcmd = np.array([2*pi*Apan/Tscan*cos((2*pi)*(t - t_0)/ Tscan), 8*pi*Atilt/Tscan*cos((8*pi)*(t - t_0)/ Tscan)])
         return (pcmd, vcmd)
 
@@ -95,7 +91,7 @@ def controller(shared):
     t = 0.0
     offset = np.array([-pi/24, -pi/8])
     feedback = group.get_next_feedback(reuse_fbk=feedback)
-    phold = np.array([feedback.position[0], feedback.position[1]])
+    phold = np.array([feedback.position[0], feedback.position[1]]) - offset
     vmax = np.array([2.5, 2.5])
     amax = np.array([vmax/0.4, vmax/0.4])
     
@@ -164,7 +160,7 @@ def controller(shared):
                 t0 = t
                 v0 = vcmd
                 p0 = pcmd
-                pf = key_positions[key_pressed] + offset
+                pf = key_positions[key_pressed]
                 vf = np.array([0.0, 0.0])
                 if key_pressed == 's':
                     traj = Traj.SPLINE
@@ -209,54 +205,59 @@ def controller(shared):
             else:
                 raise ValueError('Unexpected end of motion')
             tf = t0 + tm
-        
-        # if traj is Traj.SCAN and t+dt > tf:
-            #break
-            
             
         
         obj_newdat = False
         if shared.lock.acquire():
             obj_newdat = shared.newdata
             num_objs_detected = len(shared.detectedobjs)
-            historyofobjects = historyofobjects + shared.detectedobjs
+            if obj_newdat:
+                historyofobjects = historyofobjects + shared.detectedobjs
+                # print(f'detected object 1: {shared.detectedobjs[0][0]}')
+                # print(f'detected object 2: {shared.detectedobjs[0][1]}')
+                print(f'num_known: {knownobjects}')
             
-            for obj in shared.detectedobjs:
-                if len(knownobjects) == 0:
-                    knownobjects.append(obj)
-                for i in range(len(knownobjects)):
-                    dist = np.sqrt((obj[0] - knownobjects[i][0])**2 + (obj[1] - knownobjects[i][1])**2)
-                    if (dist > Rmatch):
+                for obj in shared.detectedobjs:
+                    if len(knownobjects) == 0:
                         knownobjects.append(obj)
-            
-            
-            if mode is Mode.TRACKING and obj_newdat and num_objs_detected > 0:
-                # cant do this in next if statement because don't have access to shared.params
-                pf = np.array([shared.detectedobjs[0][0], shared.detectedobjs[0][1]]) - offset
+                    else:
+                        known_length = len(knownobjects)
+                        obj_is_new = True
+                        for i in range(known_length):
+                            dist = np.sqrt((obj[0] - knownobjects[i][0])**2 + (obj[1] - knownobjects[i][1])**2)
+                            if (dist < Rmatch):
+                                obj_is_new = False
+                                knownobjects[i] = obj
+                                break
+                        
+                        if (obj_is_new):
+                            knownobjects.append(obj)
                 shared.newdata = False
+                
+                if mode is Mode.TRACKING:
+                    c = int(t/3) % len(knownobjects)
+                    pf = np.array([knownobjects[c][0], knownobjects[c][1]])
+                    v0 = vcmd
+                    traj = Traj.SPLINE
+                    t0 = t
+                    p0 = pcmd
+                    vf = np.array([0.0, 0.0])
+                    tm = movetime(p0, pf, vmax, vf)
+                    tm = max(tm, 1)
+                    tf = t0 + tm
+                    (a, b, c, d) = calcparams(t0, tf, p0, pf, v0, vf)
             shared.lock.release()
-            
-        if mode is Mode.TRACKING and obj_newdat and num_objs_detected > 0:
-            
-            traj = Traj.SPLINE
-            t0 = t
-            p0 = pcmd
-            pf = np.array([knownobjects[objofinterest][0], objofinterest[0][1]]) - offset
-            vf = np.array([0.0, 0.0])
-            tm = movetime(p0, pf, vmax, vf)
-            tm = max(tm, 1)
-            tf = t0 + tm
-            (a, b, c, d) = calcparams(t0, tf, p0, pf, v0, vf)
+                    
 
         # Send the commands.  This returns immediately.
-        command.position = list(pcmd)
+        command.position = list(pcmd + offset)
         command.velocity = list(vcmd)
         group.send_command(command)
 
         # Read the actual data. This blocks (internally waits) 10ms for
         # the data and therefor replaces the "sleep(0.01)".
         feedback = group.get_next_feedback(reuse_fbk=feedback)
-        pact = np.array([feedback.position[0], feedback.position[1]]) + offset
+        pact = np.array([feedback.position[0], feedback.position[1]]) - offset
         vact = np.array([feedback.velocity[0], feedback.velocity[1]])
         
         if shared.lock.acquire():
@@ -298,13 +299,16 @@ def controller(shared):
     fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, sharex=True)
     
     fig, (ax5) = plt.subplots(1, 1, sharex=True)
-    ax5.scatter(ObjAngles[0,0:index], ObjAngles[1,0:index], color='black')
+    #ax5.scatter(ObjAngles[0,0:index], ObjAngles[1,0:index], color='black')
+    pan_histories = [obj[0] for obj in historyofobjects]
+    tilt_histories = [obj[1] for obj in historyofobjects]
+    ax5.scatter(pan_histories, tilt_histories, color='black')
     ax5.set_xlim(-1.7, 1.7)
     ax5.set_ylim(-1, 1)
     ax5.set_xlabel('theta pan')
     ax5.set_ylabel('theta tilt')
     ax5.set_title('Objects locations from scan')
-    plt.show()
+    # plt.show()
     
     ax1.plot(Time[0:index], PAct[0, 0:index], color='blue', linestyle='-',  label='Pan P Act')
     ax1.plot(Time[0:index], PCmd[0, 0:index], color='blue', linestyle='--', label='Pan P Cmd')

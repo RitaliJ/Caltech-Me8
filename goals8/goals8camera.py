@@ -102,36 +102,34 @@ def detector(shared):
             # fit an ellipse to a single contour
             if (len(contour) >= 5):
                 ((xe, ye), (w, h), angle) = cv2.fitEllipse(contour)
-            if cv2.contourArea(contour) > CUTOFF and (0.7*h < w and w < 1.3*h):
-                
-                cv2.drawContours(frame, [contour], 0, (0,255,0), 2)
-                object_detected = [xe, ye]
-                # single contour centroid method
-                # M = cv2.moments(contour)
-                # area = M['m00']
-                # x_c = int(M['m10'] / M['m00'])
-                # y_c = int(M['m01'] / M['m00'])
-                ellipse = cv2.fitEllipse(contour)
-                cv2.ellipse(frame, ellipse, (0,255,255), 2)
-                #print(f'({xe}, {ye})')
-                cv2.circle(frame, (int(xe), int(ye)), 4, (0, 255, 255), -1)
-                
-                # Calculate the pan and tilt for each object
-                theta_pan = camerapan - scale_pan*(object_detected[0] - W//2)
-                theta_tilt = cameratilt - scale_tilt*(object_detected[1] - H//2)
-                if theta_tilt < pi/4:
-                    detectedobjects.append((theta_pan, theta_tilt))
-                
-            else:
-                cv2.drawContours(frame, [contour], 0, (0,0,255), 2)
+                if cv2.contourArea(contour) > CUTOFF and (0.7*h < w and w < 1.3*h):
+                    
+                    cv2.drawContours(frame, [contour], 0, (0,255,0), 2)
+                    object_detected = [xe, ye]
+                    # single contour centroid method
+                    # M = cv2.moments(contour)
+                    # area = M['m00']
+                    # x_c = int(M['m10'] / M['m00'])
+                    # y_c = int(M['m01'] / M['m00'])
+                    ellipse = cv2.fitEllipse(contour)
+                    cv2.ellipse(frame, ellipse, (0,255,255), 2)
+                    #print(f'({xe}, {ye})')
+                    cv2.circle(frame, (int(xe), int(ye)), 4, (0, 255, 255), -1)
+                    
+                    # Calculate the pan and tilt for each object
+                    theta_pan = camerapan - scale_pan*(object_detected[0] - W//2)
+                    theta_tilt = cameratilt - scale_tilt*(object_detected[1] - H//2)
+                    if theta_tilt < pi/8 and theta_pan > -1:
+                        detectedobjects.append((theta_pan, theta_tilt))
+                    
+                else:
+                    cv2.drawContours(frame, [contour], 0, (0,0,255), 2)
             
         # Grab the actual motor angles showing where the camera is pointing.
-        
-        if len(detectedobjects) > 0:
-            if shared.lock.acquire():
-                shared.detectedobjs = detectedobjects.copy()
-                shared.newdata = True
-                shared.lock.release()
+        if shared.lock.acquire():
+            shared.detectedobjs = detectedobjects.copy()
+            shared.newdata = True
+            shared.lock.release()
             #print(f'Camera pan/tilt: {camerapan}, {cameratilt}')
             
         # Show the processed image with the given title.  Note this won't
